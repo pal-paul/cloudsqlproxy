@@ -1,0 +1,58 @@
+name: "Cloud Sql Proxy"
+description: "Cloud Sql Proxy"
+
+branding:
+  icon: "database"
+  color: "red"
+
+inputs:
+  credential:
+    description: "Service Account JSON Key"
+    required: true
+  instance:
+    description: "Cloud Sql instance"
+    required: true
+  port:
+    description: "Listen on port"
+    required: false
+    default: 5432
+  proxy_version:
+    description: "CloudSQL Proxy Version"
+    required: false
+    default: latest
+
+runs:
+  using: "composite"
+  steps:
+    - name: Start Google Cloud Sql Proxy
+      shell: bash
+      run: |
+        # write google application credentials to a temporary file to be used inside the container
+        mkdir -p /tmp/cloudsql-proxy
+        echo '${{ inputs.credential }}' > /tmp/cloudsql-proxy/key.json
+        # start container
+        docker run -d --net host --name cloudsql-proxy --restart on-failure \
+        -v /tmp/cloudsql-proxy:/tmp/cloudsql-proxy \
+        gcr.io/cloudsql-docker/gce-proxy:${{ inputs.proxy_version }} \
+        /cloud_sql_proxy \
+          -credential_file /tmp/cloudsql-proxy/key.json \
+          -dir /tmp \
+          -instances=${{ inputs.instance }}=tcp:127.0.0.1:${{ inputs.port }}
+        # wait until connections are accepted
+        sleep 3
+        isready=0
+        for i in {1..10}; do
+          echo "Wait for connections to be ready ... $i/10"
+          (${{ github.action_path }}/cloudsqlproxy.sh.sh --quiet --timeout=3 --host=127.0.0.1 --port=${{ inputs.port }} || exit $?) && true # escape bash's pipefail
+          isready=$?
+          if [[ $isready -eq 0 ]]; then
+            break
+          fi
+          sleep 2
+        done
+        # print container logs
+        docker logs cloudsql-proxy
+        # exit with error code if we couldn't connect
+        if [[ $isready -ne 0 ]]; then
+          exit $isready 
+        fi
